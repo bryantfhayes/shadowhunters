@@ -2,6 +2,7 @@ import json
 import random
 
 from fastapi import FastAPI
+
 from tinydb import Query, where
 from uuid import uuid4
 from model import db, games
@@ -13,6 +14,7 @@ app = FastAPI()
 #
 # /games/{id}/start
 #
+
 @app.post("/games/{game_id}/start")
 def start_game(game_id):
     """
@@ -71,9 +73,57 @@ def delete_player(game_id, player_id):
     try:
         game = Game(**games.get(where('uuid') == game_id))
     except Exception as err:
-        return {"error" : err}, 404
+        return {"error" : str(err)}, 404
 
     game.remove_player(player_id)
+    games.update(game.dict(), where('uuid') == game_id)
+
+    return {}
+
+#
+# /games/{game_id}/players/{player_id}/{action}
+#
+@app.post("/games/{game_id}/players/{player_id}/roll")
+def player_interact_roll(game_id, player_id):
+    """
+    Given player tried to roll the dice
+    """
+    try:
+        game = Game(**games.get(where('uuid') == game_id))
+        game.roll(player_id)
+    except Exception as err:
+        return {"error" : str(err)}, 404
+
+    games.update(game.dict(), where('uuid') == game_id)
+
+    return {}
+
+@app.post("/games/{game_id}/players/{player_id}/roll_target")
+def player_interact_roll_target(game_id: str, player_id: str, location: Location):
+    """
+    Given player chooses which location they want to go to
+    """
+    try:
+        game = Game(**games.get(where('uuid') == game_id))
+        game.roll_target(player_id, location)
+    except Exception as err:
+        return {"error" : str(err)}, 404
+
+    games.update(game.dict(), where('uuid') == game_id)
+
+    return {}
+
+@app.post("/games/{game_id}/players/{player_id}/action")
+def player_interact_action(game_id: str, player_id: str):
+    """
+    Given player draws or activates ability on current tile
+    """
+    try:
+        game = Game(**games.get(where('uuid') == game_id))
+        game.action(player_id)
+    except Exception as err:
+        return {"error" : str(err)}, 404
+
     games.update(game.dict(), where('uuid') == game_id)
 
     return {}
@@ -97,7 +147,11 @@ def new_game():
 
 @app.get("/games/{game_id}")
 def get_game(game_id : str):
-    return games.get(where('uuid') == game_id)
+    try:
+        return games.get(where('uuid') == game_id)
+    except Exception as e:
+        print(repr(e))
+        exit(1)
 
 @app.delete("/games/{game_id}")
 def delete_game(game_id : str):

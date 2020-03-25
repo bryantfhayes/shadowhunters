@@ -2,12 +2,15 @@ import json
 import random
 
 from tinydb import TinyDB, Query, where
+from tinydb.storages import JSONStorage
+from tinydb.middlewares import CachingMiddleware
+
 from uuid import uuid4
 from pydantic import BaseModel
-from typing import List
+from typing import List, Dict
 from enum import Enum
 
-db = TinyDB('db.json')
+db = TinyDB('db.json', storage=CachingMiddleware(JSONStorage))
 games = db.table("games")
 
 MAX_PLAYER_COUNT = 8
@@ -72,10 +75,32 @@ cards = {
     ]
 }
 
+#
+# Helpers
+#
+def get_uuid():
+    """
+    Get a unique identifier
+    """
+    return str(uuid4())
+
+#
+# Models
+#
+
 class Team(str, Enum):
     Shadow = "shadow"
     Hunter = "hunter"
     Neutral = "neutral"
+    Unassigned = "unassigned"
+
+class LocationAction(str, Enum):
+    DrawHermit = "draw_hermit"
+    DrawBlack = "draw_black"
+    DrawWhite = "draw_white"
+    DrawAny = "draw_any"
+    StealEquipment = "steal_equipment"
+    WeirdWoods = "weird_woods"
     Unassigned = "unassigned"
 
 class DeckType(str, Enum):
@@ -86,6 +111,13 @@ class DeckType(str, Enum):
 class Phase(str, Enum):
     Lobby = "lobby"
     Roll = "roll"
+    RollTarget = "roll_target"
+    Action = "action"
+    ActionTarget = "action_target"
+    ActionResponse = "action_response"
+    Attack = "attack"
+    AttackTarget = "attack_target"
+    AttackResponse = "attack_response"
 
 class Deck(BaseModel):
     cardtype: DeckType
@@ -102,7 +134,7 @@ class Location(BaseModel):
     name : str
     description : str
     rolls : List[int]
-    action : str
+    action : LocationAction
 
 class Equipment(BaseModel):
     name : str
@@ -126,35 +158,128 @@ class Player(BaseModel):
 
 class Game(BaseModel):
     uuid : str
-    players : List[Player]
-    turn : int
+    players : Dict[str, Player]
+    turn : str
+    turn_index : int
     phase : Phase
+    last_roll : int
+    notifications : List[str]
     locations : List[Location]
+    turn_order : List[str]
     whitedeck : Deck
     blackdeck : Deck
     hermitdeck : Deck
 
+    def notify(self, msg):
+        self.notifications.append(msg)
+        print(msg)
+
+    def rolldice(self, d4=True, d6=True):
+        """
+        Roll a X-sided dice
+        """
+        if d4 and d6:
+            return random.randint(2, 10)
+        elif d4:
+            return random.randint(1, 4)
+        elif d6:
+            return random.randint(1, 6)
+        else:
+            raise RuntimeError("Bad dice combo!")
+
     def new_player(self, name):
         default_role = Role(name="", team=Team.Unassigned, description="", ability="", maxhp=0, damage=0)
-        default_location = Location(name="", description="", rolls=[], action="")
-        player = Player(uuid=str(uuid4()), name=name, role=default_role, equipment=[], location=default_location)
-        self.players.append(player)
+        default_location = Location(name="", description="", rolls=[], action=LocationAction.Unassigned)
+        player = Player(uuid=get_uuid(), name=name, role=default_role, equipment=[], location=default_location)
+        self.players[player.uuid] = player
         return player
 
+    def advance_turn(self):
+        self.turn_index += 1
+        if self.turn_index >= len(self.turn_order):
+            self.turn_index = 0
+        self.turn = self.turn_order[self.turn_index]
+
+    def roll(self, player_id):
+        """
+        Perform a roll operation for a designated player
+        """
+        if player_id not in self.players:
+            raise RuntimeError("Invalid player!")
+        
+        if player_id != self.turn:
+            raise RuntimeError("Not your turn!")
+
+        if self.phase != Phase.Roll:
+            raise RuntimeError("You can't do that right now!")
+
+        self.last_roll = self.rolldice(d4=True, d6=True)
+        self.notify("{0} rolled a {1}!".format(self.players[player_id].name, self.last_roll))
+
+        if self.last_roll == 7:
+            self.notify("{0} is choosing where they want to move!".format(self.players[player_id].name))
+            self.phase = Phase.RollTarget
+        else:
+            new_location = None
+            for location in self.locations:
+                if self.last_roll in location.rolls:
+                    new_location = location
+                    break
+            self.players[player_id].location = new_location
+            self.notify("{0} moved to {1}!".format(self.players[player_id].name, self.players[player_id].location.name))
+
+            self.phase = Phase.Action
+
+    def roll_target(self, player_id, location):
+        """
+        Perform a roll_target operation for a designated player
+        """
+        if player_id not in self.players:
+            raise RuntimeError("Invalid player!")
+        
+        if player_id != self.turn:
+            raise RuntimeError("Not your turn!")
+
+        if self.phase != Phase.RollTarget:
+            raise RuntimeError("You can't do that right now!")
+
+        self.players[player_id].location = location
+        self.notify("{0} moved to {1}!".format(self.players[player_id].name, self.players[player_id].location.name))
+
+        self.phase = Phase.Action
+
+    def action(self, player_id):
+        """
+        Perform a location-based action operation for a designated player
+        """
+        if player_id not in self.players:
+            raise RuntimeError("Invalid player!")
+        
+        if player_id != self.turn:
+            raise RuntimeError("Not your turn!")
+
+        if self.phase != Phase.Action:
+            raise RuntimeError("You can't do that right now!")
+
+        # Draw a card or activate location ability
+        location = self.players[player_id].location
+        if location.action == LocationAction.DrawBlack:
+            self.notify("{0} drew a black card!".format(self.players[player_id].name))
+
+        self.phase = Phase.ActionTarget
+
     def remove_player(self, player_id):
-        for i, o in enumerate(self.players):
-            if o.uuid == player_id:
-                del self.players[i]
-                break
+        if player_id in self.players:
+            del self.players[player_id]
 
     def start(self):
-        if len(self.players) not in roles_for_player_count:
+        if len(self.players.keys()) not in roles_for_player_count:
             return False, "Not enough players!"
 
         # Make a list of potential roles in this game
         possible_roles = []
         all_roles = list(roles)
-        for role in roles_for_player_count[len(self.players)]:
+        for role in roles_for_player_count[len(self.players.keys())]:
             # Pick a role from the list
             selected_role = random.choice([r for r in all_roles if r["team"] == role])
             possible_roles.append(selected_role)
@@ -163,7 +288,7 @@ class Game(BaseModel):
             all_roles = [r for r in all_roles if r["name"] != selected_role["name"]]
 
         # Assign roles to all players
-        for player in self.players:
+        for _, player in self.players.items():
             # Pick a role from the chosen list for this game
             selected_role = random.choice(possible_roles)
             player.role = Role(**selected_role)
@@ -171,8 +296,12 @@ class Game(BaseModel):
             # Whichever you picked, remove it from the available lsit of roles
             possible_roles = [r for r in possible_roles if r["name"] != selected_role["name"]]
 
+        # Get turn order
+        self.turn_order = list(self.players.keys())
+        random.shuffle(self.turn_order)
+
         # Set game to player 0's turn
-        self.turn = 0
+        self.turn = self.turn_order[0]
         self.phase = Phase.Roll
 
         return True, ""
@@ -183,4 +312,4 @@ class Game(BaseModel):
         random.shuffle(tiles)
         locations = [Location(**t) for t in tiles]
 
-        return cls(uuid=str(uuid4()), players=[], turn=-1, phase=Phase.Lobby, locations=locations, whitedeck=Deck.new_deck(DeckType.White), blackdeck=Deck.new_deck(DeckType.Black), hermitdeck=Deck.new_deck(DeckType.Hermit))
+        return cls(uuid=get_uuid(), players={}, turn="", turn_index=0, phase=Phase.Lobby, last_roll=0, notifications=[], locations=locations, turn_order=[], whitedeck=Deck.new_deck(DeckType.White), blackdeck=Deck.new_deck(DeckType.Black), hermitdeck=Deck.new_deck(DeckType.Hermit))
