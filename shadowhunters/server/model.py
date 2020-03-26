@@ -107,6 +107,14 @@ class DeckType(str, Enum):
     White = "white"
     Black = "black"
     Hermit = "hermit"
+    Unassigned = "unassigned"
+
+class Card(BaseModel):
+    index: int
+    name: str
+    type: DeckType
+    description: str
+    effect: str
 
 class Phase(str, Enum):
     Lobby = "lobby"
@@ -118,6 +126,7 @@ class Phase(str, Enum):
     Attack = "attack"
     AttackTarget = "attack_target"
     AttackResponse = "attack_response"
+    ActionChoice = "action_choice"
 
 class Deck(BaseModel):
     cardtype: DeckType
@@ -129,6 +138,14 @@ class Deck(BaseModel):
         drawpile = list(range(0, len(cards[cardtype.value])))
         random.shuffle(drawpile)
         return Deck(cardtype=cardtype, drawpile=drawpile, discardpile=[])
+
+    def draw(self):
+        """
+        Draw a card from the deck, and return actual card data
+        """
+        picked = self.drawpile.pop(0)
+        self.discardpile.append(picked)
+        return Card(**cards[self.cardtype.value][picked])
 
 class Location(BaseModel):
     name : str
@@ -156,6 +173,10 @@ class Player(BaseModel):
     equipment : List[Equipment]
     location : Location
 
+class ActionResult(BaseModel):
+    location_action: LocationAction
+    card: Card
+
 class Game(BaseModel):
     uuid : str
     players : Dict[str, Player]
@@ -169,6 +190,7 @@ class Game(BaseModel):
     whitedeck : Deck
     blackdeck : Deck
     hermitdeck : Deck
+    action_results = ActionResult(location_action=LocationAction.Unassigned, card=Card(index=-1, name="", type=DeckType.Unassigned, description="", effect=""))
 
     def notify(self, msg):
         self.notifications.append(msg)
@@ -265,6 +287,30 @@ class Game(BaseModel):
         location = self.players[player_id].location
         if location.action == LocationAction.DrawBlack:
             self.notify("{0} drew a black card!".format(self.players[player_id].name))
+            blackcard = self.game.blackdeck.draw()
+            self.action_results = ActionResult(location.action, blackcard)
+        elif location.action == LocationAction.DrawHermit:
+            self.notify("{0} drew a hermit card!".format(self.players[player_id].name))
+            hermitcard = self.game.hermitdeck.draw()
+            self.action_results = ActionResult(location.action, hermitcard)
+        elif location.action == LocationAction.DrawWhite:
+            self.notify("{0} drew a white card!".format(self.players[player_id].name))
+            whitecard = self.game.whitedeck.draw()
+            self.action_results = ActionResult(location.action, whitecard)
+        elif location.action == LocationAction.StealEquipment:
+            self.notify("{0} chose to steam an equipment!".format(self.players[player_id].name))
+            self.phase = Phase.ActionChoice
+            self.action_results.location_action = location.action
+        elif location.action == LocationAction.WeirdWoods:
+            self.notify("{0} activated the weird woods!".format(self.players[player_id].name))
+            self.phase = Phase.ActionChoice
+            self.action_results.location_action = location.action
+        elif location.action == LocationAction.DrawAny:
+            self.notify("{0} is choosing a card to draw!".format(self.players[player_id].name))
+            self.phase = Phase.ActionChoice
+            self.action_results.location_action = location.action
+        else:
+            raise RuntimeError("Not a valid location!")
 
         self.phase = Phase.ActionTarget
 

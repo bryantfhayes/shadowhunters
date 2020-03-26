@@ -1,5 +1,8 @@
 import requests, json, time, click
+
+from model import Game, Role, Equipment, Location, Deck, Player, Phase
 from threading import Thread
+
 import signal
 import sys
 
@@ -21,6 +24,10 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 
 class SHPlayer(object):
+
+    # Static Class Variables
+    SERVER_URL = "http://127.0.0.1:8000"
+
     def __init__(self, gameid, name):
         self.gameid = gameid
         self.name = name
@@ -28,75 +35,85 @@ class SHPlayer(object):
         self.uuid = ""
         self.data = {}
         self.last_phase = ""
+        self.game = None
+
+    @classmethod
+    def send_message(self, endpoint, httptype="POST", payload={}, headers={}):
+        """
+        Helper function to send POST/GET commands
+        """
+        response = requests.request(httptype, SHPlayer.SERVER_URL + endpoint, headers=headers, data=payload)
+        response = json.loads(response.text.encode('utf8'))
+        return response
+
+    @classmethod
+    def new_game(self):
+        response = self.send_message("/games")
+        return response
 
     def join_game(self):
-        url = "http://127.0.0.1:8000/games/{0}/players?name={1}".format(self.gameid, self.name)
-        payload = {}
-        headers= {}
-        response = requests.request("POST", url, headers=headers, data = payload)
-        response = json.loads(response.text.encode('utf8'))
-        print(response)
-        self.uuid = response["uuid"]
+        """
+        Join game
+        """
+        response = self.send_message("/games/{0}/players?name={1}".format(self.gameid, self.name))
+        player = Player(**response)
+        self.uuid = player.uuid
 
-    def get_game_data(self):
-        url = "http://127.0.0.1:8000/games/{0}".format(self.gameid)
-        payload = {}
-        headers= {}
-        response = requests.request("GET", url, headers=headers, data = payload)
-        response = json.loads(response.text.encode('utf8'))
-        self.data = response
-        if self.last_phase != self.data["phase"]:
-            print(self.data["players"][self.uuid])
-            print(self.data["notifications"])
-        self.last_phase = self.data["phase"]
+    def get_game_data(self):   
+        """
+        Get the current game state
+        """     
+        response = self.send_message("/games/{0}".format(self.gameid), httptype="GET")
+        self.game = Game(**response)
+        if self.last_phase != self.game.phase:
+            print(self.game.players[self.uuid])
+            print(self.game.notifications)
+        self.last_phase = self.game.phase
 
     def start_game(self):
-        url = "http://127.0.0.1:8000/games/{0}/start".format(self.gameid)
-        payload = {}
-        headers= {}
-        response = requests.request("POST", url, headers=headers, data = payload)
-        response = json.loads(response.text.encode('utf8'))
+        """
+        Start the game!
+        """
+        self.send_message("/games/{0}/start".format(self.gameid))
 
-    def roll(self):
-        url = "http://127.0.0.1:8000/games/{0}/players/{1}/roll".format(self.gameid, self.uuid)
-        payload = {}
-        headers= {}
-        response = requests.request("POST", url, headers=headers, data = payload)
-        response = json.loads(response.text.encode('utf8'))
-
-    def roll_target(self, location):
-        url = "http://127.0.0.1:8000/games/{0}/players/{1}/roll_target".format(self.gameid, self.uuid)
-        print(location)
-        payload = json.dumps(location)
-        headers= {}
-        response = requests.request("POST", url, headers=headers, data = payload)
-        response = json.loads(response.text.encode('utf8'))
+    def do_roll(self):
+        """
+        Attempt to roll the dice
+        """
+        self.send_message("/games/{0}/players/{1}/roll".format(self.gameid, self.uuid))
+        
+    def do_roll_target(self, location):
+        """
+        Player rolled a 7, time to choose where to go
+        """
+        self.send_message("/games/{0}/players/{1}/roll_target".format(self.gameid, self.uuid))
+    
+    def do_action(self):
+        """
+        Player decides to use the location-based action
+        """
+        self.send_message("/games/{0}/players/{1}/action".format(self.gameid, self.uuid))
 
     def update(self):
+        """
+        Main update loop
+        """
         # Get game state
         self.get_game_data()
 
         # If it is my turn, do something
-        if self.data["turn"] == self.uuid:
-            if self.data["phase"] == "roll":
-                self.roll()
-            elif self.data["phase"] == "roll_target":
-                # Pick where to go!
-                self.roll_target(self.data["locations"][0])
-
-    def run(self):
-        self.running = True
-        while self.running:
-            self.update()
-            #time.sleep(0.05)
-
-def new_game():
-    url = "http://127.0.0.1:8000/games"
-    payload = {}
-    headers= {}
-    response = requests.request("POST", url, headers=headers, data = payload)
-    response = json.loads(response.text.encode('utf8'))
-    return response
+        if self.game.turn == self.uuid:
+            if self.game.phase == Phase.Roll:
+                # Tell the server to roll the dice
+                self.do_roll()
+            elif self.game.phase == Phase.RollTarget:
+                # Tell the server where you want to go
+                self.do_roll_target(self.game.locations[0])
+            elif self.game.phase == Phase.Action:
+                # Ask server to perform an action based on the location you are at
+                self.do_action()
+            elif self.game.phase == Phase.ActionTarget:
+                pass
 
 class player_thread(Thread):
     def __init__(self, gameid, name):
@@ -126,7 +143,7 @@ class player_thread(Thread):
 def main(gameid, name, new, test):
     global p1, p2, p3, p4, p5, p6, p7, p8
     if test:
-        gameid = new_game()["uuid"]
+        gameid = Game(**SHPlayer.new_game()).uuid
         p1 = player_thread(gameid, "Player 1")
         p2 = player_thread(gameid, "Player 2")
         p3 = player_thread(gameid, "Player 3")
@@ -137,12 +154,19 @@ def main(gameid, name, new, test):
         p8 = player_thread(gameid, "Player 8")
 
         p1.start()
+        time.sleep(0.35)
         p2.start()
+        time.sleep(0.35)
         p3.start()
+        time.sleep(0.35)
         p4.start()
+        time.sleep(0.35)
         p5.start()
+        time.sleep(0.35)
         p6.start()
+        time.sleep(0.35)
         p7.start()
+        time.sleep(0.35)
         p8.start()
 
         p8.start_game = True
@@ -159,13 +183,12 @@ def main(gameid, name, new, test):
         sys.exit(0)
     
     if new:
-        gameid = new_game()["uuid"]
+        gameid = Game(**SHPlayer.new_game()).uuid
         print("Created a new game with UUID: {}".format(gameid))
     
     if gameid is not None:
         player = SHPlayer(gameid, name)
         player.join_game()
-        player.run()
     else:
         print("Please specify GAMEID or use --new flag")
         exit()

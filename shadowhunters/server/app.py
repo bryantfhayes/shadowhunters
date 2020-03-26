@@ -84,7 +84,7 @@ def delete_player(game_id, player_id):
 # /games/{game_id}/players/{player_id}/{action}
 #
 @app.post("/games/{game_id}/players/{player_id}/roll")
-def player_interact_roll(game_id, player_id):
+def player_interact_roll(game_id: str, player_id: str):
     """
     Given player tried to roll the dice
     """
