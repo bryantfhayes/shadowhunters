@@ -1,10 +1,11 @@
 import requests, json, time, click
 
-from model import Game, Role, Equipment, Location, Deck, Player, Phase
+from model import Game, Role, Equipment, Location, Deck, Player, Phase, LocationAction, Choice, ChoiceType
 from threading import Thread
 
 import signal
 import sys
+import random
 
 p1, p2, p3, p4 = None, None, None, None
 p5, p6, p7, p8 = None, None, None, None
@@ -86,13 +87,38 @@ class SHPlayer(object):
         """
         Player rolled a 7, time to choose where to go
         """
-        self.send_message("/games/{0}/players/{1}/roll_target".format(self.gameid, self.uuid))
+        self.send_message("/games/{0}/players/{1}/roll_target".format(self.gameid, self.uuid), payload=json.dumps(location.dict()))
     
     def do_action(self):
         """
-        Player decides to use the location-based action
+        Player decides to use the location-based action.
+
+        For example: They will call this end point if they are
+                     on the cemetery and decide to draw a card.
         """
         self.send_message("/games/{0}/players/{1}/action".format(self.gameid, self.uuid))
+
+    def do_action_target(self):
+        """
+        Player decides how to respond to awaiting action. The action requires a target of some kind.
+        For example: you landed on Weird Woods and you need to select a target.
+        """
+        print("Current Event: {}".format(self.game.action_results))
+        if self.game.action_results.location_action == LocationAction.DrawAny:
+            target = "blackdeck"
+            self.send_message("/games/{0}/players/{1}/action_target_deck/{2}".format(self.gameid, self.uuid, target))
+        else:
+            target = random.choice(list(self.game.players.values())).uuid
+            print(target)
+            self.send_message("/games/{0}/players/{1}/action_target_player/{2}".format(self.gameid, self.uuid, target))
+
+    def choice_needed(self):
+        print(self.game.current_choice)
+        choice_idx = 0
+        self.send_message("/games/{0}/players/{1}/choice/{2}".format(self.gameid, self.uuid, choice_idx))
+
+    def endturn(self):
+        self.send_message("/games/{0}/players/{1}/endturn".format(self.gameid, self.uuid))
 
     def update(self):
         """
@@ -103,9 +129,14 @@ class SHPlayer(object):
 
         # If it is my turn, do something
         if self.game.turn == self.uuid:
+
+            print(self.game.phase)
+
             if self.game.phase == Phase.Roll:
                 # Tell the server to roll the dice
                 self.do_roll()
+            elif self.game.phase == Phase.ChoiceNeeded:
+                self.choice_needed()
             elif self.game.phase == Phase.RollTarget:
                 # Tell the server where you want to go
                 self.do_roll_target(self.game.locations[0])
@@ -113,7 +144,10 @@ class SHPlayer(object):
                 # Ask server to perform an action based on the location you are at
                 self.do_action()
             elif self.game.phase == Phase.ActionTarget:
-                pass
+                # Tell server which action you want to perform since it is waiting for your choice
+                self.do_action_target()
+            else:
+                self.endturn()
 
 class player_thread(Thread):
     def __init__(self, gameid, name):

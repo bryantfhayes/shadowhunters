@@ -10,6 +10,7 @@ from model import Game, Role, Equipment, Location, Deck, Player
 from model import MAX_PLAYER_COUNT
 
 app = FastAPI()
+print(app)
 
 #
 # /games/{id}/start
@@ -98,35 +99,38 @@ def player_interact_roll(game_id: str, player_id: str):
 
     return {}
 
-@app.post("/games/{game_id}/players/{player_id}/roll_target")
-def player_interact_roll_target(game_id: str, player_id: str, location: Location):
+@app.post("/games/{game_id}/players/{player_id}/choice/{choice_idx}")
+def player_interact_make_choice(game_id: str, player_id: str, choice_idx: int):
     """
-    Given player chooses which location they want to go to
+    Given player makes a choice from given list
     """
     try:
         game = Game(**games.get(where('uuid') == game_id))
-        game.roll_target(player_id, location)
+        game.make_choice(player_id, choice_idx)
     except Exception as err:
+        print(err)
         return {"error" : str(err)}, 404
 
     games.update(game.dict(), where('uuid') == game_id)
 
     return {}
 
-@app.post("/games/{game_id}/players/{player_id}/action")
-def player_interact_action(game_id: str, player_id: str):
+@app.post("/games/{game_id}/players/{player_id}/endturn")
+def player_interact_end_turn(game_id: str, player_id: str):
     """
-    Given player draws or activates ability on current tile
+    Given player ends their turn
     """
     try:
         game = Game(**games.get(where('uuid') == game_id))
-        game.action(player_id)
+        game.advance_turn()
     except Exception as err:
+        print(err)
         return {"error" : str(err)}, 404
 
     games.update(game.dict(), where('uuid') == game_id)
 
     return {}
+
 
 #
 # /games

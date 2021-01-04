@@ -59,6 +59,7 @@ players_list = list(shc.data["players"].keys())
 for player_id in players_list:
     print("Player: {}".format(shc.data["players"][player_id]["name"]))
     shc.roll(player_id)
+    
 for player_id in players_list:
     print("Player: {}".format(shc.data["players"][player_id]["name"]))
     shc.roll(player_id)
